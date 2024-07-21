@@ -110,6 +110,6 @@ func main() {
 		Blobs:   blobs,
 	}
 
-	str := tikz.NewCompiler(doc.Root.Children[1])
+	str := tikz.NewCompiler(doc.Root.Children[1], nil)
 	fmt.Println(str)
 }

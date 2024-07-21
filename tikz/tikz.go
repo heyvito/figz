@@ -4,129 +4,21 @@ import (
 	"figz/fig"
 	"fmt"
 	"github.com/heyvito/carrows"
+	"math"
 	"strings"
 )
 
-type Position struct {
-	X, Y float32
-}
-
-func (p Position) Sum(p2 Position) Position {
-	return Position{p.X + p2.X, p.Y + p2.Y}
-}
-
-func (p Position) MiddleWith(p2 Position) Position {
-	pos := p.Sum(p2)
-	pos.X /= 2.0
-	pos.Y /= 2.0
-	return pos
-}
-
-func (p Position) String() string {
-	return fmt.Sprintf("%f, %f", p.X, p.Y)
-}
-
-func (p Position) Diff(of Position) Position {
-	return Position{p.X - of.X, p.Y - of.Y}
-}
-
-func (p Position) DirectionTo(pos Position) Direction {
-	switch {
-	case pos.X > p.X:
-		return RightDirection
-	case pos.X < p.X:
-		return LeftDirection
-	case pos.Y > p.Y:
-		return BottomDirection
-	case pos.Y < p.Y:
-		return TopDirection
-	case pos.Y == p.Y:
-		return TopDirection
-	case pos.X == p.X:
-		return LeftDirection // ?
-	}
-
-	panic("unreachable")
-}
-
-func (p Position) Sub(pos Position) Position {
-	return Position{p.X - pos.X, p.Y - pos.Y}
-}
-
-type DrawingNode struct {
-	Node *fig.NodeChange
-	Q1   Position
-	Q2   Position
-	Size Position
-}
-
-type Direction int
-
-const (
-	TopDirection Direction = iota
-	RightDirection
-	BottomDirection
-	LeftDirection
-)
-
-type Side int
-
-func (s Side) Is(o Side) bool { return s&o == o }
-
-const (
-	LeftSide Side = 1 << iota
-	RightSide
-	TopSide
-	BottomSide
-	HorizontallyEqual
-	VerticallyEqual
-)
-
-func (d DrawingNode) RelativeSideOf(other DrawingNode) (s Side) {
-	if d.Q2.X > other.Q2.X {
-		s |= RightSide
-	} else if d.Q2.X < other.Q2.X {
-		s |= LeftSide
-	} else {
-		s |= HorizontallyEqual
-	}
-
-	if d.Q2.Y > other.Q2.Y {
-		s |= BottomSide
-	} else if d.Q2.Y < other.Q2.Y {
-		s |= TopSide
-	} else {
-		s |= VerticallyEqual
-	}
-	return
-}
-
 const scale = float32(0.018)
 
-func MakeDrawingNode(v *fig.NodeChange) DrawingNode {
-
-	var (
-		m00 = float32(v.Transform.M00)
-		m01 = float32(v.Transform.M01)
-		m02 = float32(v.Transform.M02) * scale
-		m10 = float32(v.Transform.M10)
-		m11 = float32(v.Transform.M11)
-		m12 = float32(v.Transform.M12) * scale
-	)
-
-	var p2 = Position{float32(v.Size.X) * scale, float32(v.Size.Y) * scale}
-	var q1 = Position{m00*0 + m01*0 + m02, m10*0 + m11*0 + m12}
-	var q2 = Position{m00*p2.X + m01*p2.Y + m02, m10*p2.X + m11*p2.Y + m12}
-
-	return DrawingNode{
-		Node: v,
-		Q1:   q1,
-		Q2:   q2,
-		Size: p2,
-	}
+type CompilerOpts struct {
+	DebugMagnets       bool
+	DebugControlPoints bool
 }
 
-func NewCompiler(page *fig.NodeChange) string {
+func NewCompiler(page *fig.NodeChange, opts *CompilerOpts) string {
+	if opts == nil {
+		opts = &CompilerOpts{}
+	}
 	nodes := make([]DrawingNode, len(page.Children))
 	nodeMap := make(map[string]DrawingNode)
 	for i, v := range page.Children {
@@ -134,6 +26,8 @@ func NewCompiler(page *fig.NodeChange) string {
 		nodeMap[fmt.Sprintf("%d:%d", v.Guid.SessionId, v.Guid.LocalId)] = nodes[i]
 	}
 	c := &Compiler{
+		b:       &sbuf{},
+		opts:    opts,
 		page:    page,
 		nodes:   nodes,
 		nodeMap: nodeMap,
@@ -142,22 +36,15 @@ func NewCompiler(page *fig.NodeChange) string {
 }
 
 type Compiler struct {
-	b       sbuf
+	b       *sbuf
 	nodes   []DrawingNode
 	nodeMap map[string]DrawingNode
 	page    *fig.NodeChange
+	opts    *CompilerOpts
 }
 
 func (c *Compiler) FindNode(g *fig.GUID) DrawingNode {
 	return c.nodeMap[fmt.Sprintf("%d:%d", g.SessionId, g.LocalId)]
-}
-
-type sbuf struct {
-	strings.Builder
-}
-
-func (s *sbuf) Writef(format string, args ...any) {
-	s.WriteString(fmt.Sprintf(format, args...) + "\n")
 }
 
 func (c *Compiler) IsArrowDiagonal(start, end Position) bool {
@@ -212,6 +99,7 @@ func (c *Compiler) MagnetToCarrow(magnet fig.ConnectorMagnet) carrows.RectSide {
 var weirdThings = map[string]struct{}{
 	"Connector Name":  {},
 	"Shape with text": {},
+	"Connector line":  {},
 }
 
 func (c *Compiler) CleanupText(t string) string {
@@ -222,111 +110,124 @@ func (c *Compiler) CleanupText(t string) string {
 }
 
 func (c *Compiler) ConvertPageToTikz() string {
-	b := sbuf{}
-	b.Writef("\\begin{tikzpicture}[yscale=-1]")
+	c.b.Writef("\\begin{tikzpicture}[yscale=-1]")
 	for _, v := range c.page.Children {
 		w := MakeDrawingNode(v)
 		switch v.Type {
 		case fig.NodeTypeText:
-			c.drawText(&b, v)
+			c.drawText(w)
 		case fig.NodeTypeShapeWithText:
-			c.drawShapeWithText(&b, w)
-
+			c.drawShapeWithText(w)
 		case fig.NodeTypeConnector:
-			nodeFrom := c.FindNode(v.ConnectorStart.EndpointNodeId)
-			magnetFrom := v.ConnectorStart.Magnet
-			nodeTo := c.FindNode(v.ConnectorEnd.EndpointNodeId)
-			magnetTo := v.ConnectorEnd.Magnet
-			var (
-				positionStart = c.PositionForNode(nodeFrom, magnetFrom)
-				positionEnd   = c.PositionForNode(nodeTo, magnetTo)
-			)
-
-			//b.Writef(`\filldraw[color=red] (%s) circle (3pt);`, positionStart)
-			//b.Writef(`\filldraw[color=red] (%s) circle (3pt);`, positionEnd)
-
-			var points []string
-
-			//connectorText := c.CleanupText(v.Name)Vai me
-			if v.ConnectorControlPoints != nil {
-				//for _, con := range v.ConnectorControlPoints {
-				//	pos := Position{
-				//		X: float32(con.Position.X) * scale,
-				//		Y: float32(con.Position.Y) * scale,
-				//	}
-				//	b.Writef(`\filldraw[color=blue] (%s) circle (3pt);`, pos)
-				//}
-				curPos := positionStart
-				points = append(points, fmt.Sprintf("(%s)", positionStart))
-
-				for _, con := range v.ConnectorControlPoints {
-					var newPos Position
-					if con.Axis.X == 1 {
-						newPos = Position{
-							X: curPos.X,
-							Y: float32(con.Position.Y) * scale,
-						}
-					} else {
-						newPos = Position{
-							X: float32(con.Position.X) * scale,
-							Y: curPos.Y,
-						}
-					}
-					points = append(points, fmt.Sprintf(`(%s)`, newPos))
-					curPos = newPos
-				}
-				rawPos := v.ConnectorControlPoints[len(v.ConnectorControlPoints)-1].Position
-				lastPos := Position{float32(rawPos.X), float32(rawPos.Y)}
-				lastPos.X *= scale
-				lastPos.Y *= scale
-				points = append(points, fmt.Sprintf(`(%s)`, lastPos))
-				allPoints := strings.Join(points, " -- ")
-				b.Writef(`\draw [thick, rounded corners] %s;`, allPoints)
-				straight := c.isStraight(curPos, lastPos, magnetTo)
-
-				if straight {
-					b.Writef(`\draw[-To, thick] (%s) -- (%s);`, lastPos, positionEnd)
-				} else {
-					midPath := Position{
-						X: positionEnd.X,
-						Y: lastPos.Y,
-					}
-					finalPosition := positionEnd
-					finalPosition.Y += 0.3
-					b.Writef(`\draw [thick, rounded corners] (%s) -- (%s) -- (%s); %% midpoint`, lastPos, midPath, finalPosition)
-					b.Writef(`\draw[-To, thick] (%s) -- (%s);`, finalPosition, positionEnd)
-				}
-
-			} else if c.IsArrowDiagonal(positionStart, positionEnd) {
-				arr := carrows.GetArrow(float64(positionStart.X), float64(positionStart.Y), float64(positionEnd.X), float64(positionEnd.Y), &carrows.Opts{
-					ControlPointStretch: 1.8,
-					AllowedStartSides:   []carrows.RectSide{c.MagnetToCarrow(magnetFrom)},
-					AllowedEndSides:     []carrows.RectSide{c.MagnetToCarrow(magnetTo)},
-				})
-				b.Writef(`\draw[-To, thick] (%f, %f) .. controls (%f,%f) and (%f,%f) .. (%f, %f);`,
-					arr.Sx, arr.Sy, arr.C1x, arr.C1y, arr.C2x, arr.C2y, arr.Ex, arr.Ey)
-
-			} else {
-				b.Writef(`\draw[-To, thick] (%s) -- (%s);`, positionStart, positionEnd)
-			}
+			c.drawArrow(w)
 		}
 	}
-	b.Writef(`\end{tikzpicture}` + "\n")
+	c.b.Writef(`\end{tikzpicture}` + "\n")
 
-	return b.String()
+	return c.b.String()
 }
 
-func (c *Compiler) drawShapeWithText(b *sbuf, w DrawingNode) {
+func (c *Compiler) drawArrow(w DrawingNode) {
+	var (
+		v             = w.Node
+		nodeFrom      = c.FindNode(v.ConnectorStart.EndpointNodeId)
+		magnetFrom    = v.ConnectorStart.Magnet
+		nodeTo        = c.FindNode(v.ConnectorEnd.EndpointNodeId)
+		magnetTo      = v.ConnectorEnd.Magnet
+		connectorText = c.CleanupText(v.Name)
+		positionStart = c.PositionForNode(nodeFrom, magnetFrom)
+		positionEnd   = c.PositionForNode(nodeTo, magnetTo)
+	)
+
+	if c.opts.DebugMagnets {
+		c.b.Writef(`\filldraw[color=red] (%s) circle (3pt);`, positionStart)
+		c.b.Writef(`\filldraw[color=red] (%s) circle (3pt);`, positionEnd)
+	}
+
+	var points []string
+
+	if v.ConnectorControlPoints != nil {
+		if c.opts.DebugControlPoints {
+			for _, con := range v.ConnectorControlPoints {
+				pos := Position{
+					X: float32(con.Position.X) * scale,
+					Y: float32(con.Position.Y) * scale,
+				}
+				c.b.Writef(`\filldraw[color=blue] (%s) circle (3pt);`, pos)
+			}
+		}
+		curPos := positionStart
+		points = append(points, fmt.Sprintf("(%s)", positionStart))
+
+		for _, con := range v.ConnectorControlPoints {
+			var newPos Position
+			if con.Axis.X == 1 {
+				newPos = Position{
+					X: curPos.X,
+					Y: float32(con.Position.Y) * scale,
+				}
+			} else {
+				newPos = Position{
+					X: float32(con.Position.X) * scale,
+					Y: curPos.Y,
+				}
+			}
+			points = append(points, fmt.Sprintf(`(%s)`, newPos))
+			curPos = newPos
+		}
+		rawPos := v.ConnectorControlPoints[len(v.ConnectorControlPoints)-1].Position
+		lastPos := Position{float32(rawPos.X), float32(rawPos.Y)}
+		lastPos.X *= scale
+		lastPos.Y *= scale
+		points = append(points, fmt.Sprintf(`(%s)`, lastPos))
+		allPoints := strings.Join(points, " -- ")
+		c.b.Writef(`\draw [thick, rounded corners] %s;`, allPoints)
+		straight := c.isStraight(curPos, lastPos, magnetTo)
+
+		if straight {
+			c.b.Writef(`\draw[-To, thick] (%s) -- (%s);`, lastPos, positionEnd)
+		} else {
+			midPath := Position{
+				X: positionEnd.X,
+				Y: lastPos.Y,
+			}
+			finalPosition := positionEnd
+			finalPosition.Y += 0.3
+			c.b.Writef(`\draw [thick, rounded corners] (%s) -- (%s) -- (%s); %% midpoint`, lastPos, midPath, finalPosition)
+			c.b.Writef(`\draw[-To, thick] (%s) -- (%s);`, finalPosition, positionEnd)
+		}
+
+	} else if c.IsArrowDiagonal(positionStart, positionEnd) {
+
+		arr := carrows.GetArrow(float64(positionStart.X), float64(positionStart.Y), float64(positionEnd.X), float64(positionEnd.Y), &carrows.Opts{
+			ControlPointStretch: 1.8,
+			AllowedStartSides:   []carrows.RectSide{c.MagnetToCarrow(magnetFrom)},
+			AllowedEndSides:     []carrows.RectSide{c.MagnetToCarrow(magnetTo)},
+		})
+		c.b.Writef(`\draw[-To, thick] (%f, %f) .. controls (%f,%f) and (%f,%f) .. (%f, %f);`,
+			arr.Sx, arr.Sy, arr.C1x, arr.C1y, arr.C2x, arr.C2y, arr.Ex, arr.Ey)
+
+	} else {
+		c.b.Writef(`\draw[-To, thick] (%s) -- (%s);`, positionStart, positionEnd)
+
+		if len(connectorText) != 0 {
+			midPoint := v.ConnectorTextMidpoint
+			c.drawArrowTextStraight(positionStart, positionEnd, connectorText, midPoint)
+		}
+	}
+}
+
+func (c *Compiler) drawShapeWithText(w DrawingNode) {
 	text := c.CleanupText(w.Node.Name)
 
 	switch w.Node.ShapeWithTextType {
 	case fig.ShapeWithTextTypeSquare, fig.ShapeWithTextTypePredefinedProcess:
-		b.Writef(`\draw (%s) rectangle node{%s} (%s);`, w.Q1, text, w.Q2)
+		c.b.Writef(`\draw (%s) rectangle node{%s} (%s);`, w.Q1, text, w.Q2)
 
 	case fig.ShapeWithTextTypeEllipse:
 	case fig.ShapeWithTextTypeDiamond:
 		pos := w.Q1.MiddleWith(w.Q2)
-		b.Writef(`\draw[rotate around={45:(%s)}, scale around={0.75:(%s)}] (%s) rectangle node{%s} (%s);`, pos, pos, w.Q1, text, w.Q2)
+		c.b.Writef(`\draw[rotate around={45:(%s)}, scale around={0.75:(%s)}] (%s) rectangle node{%s} (%s);`, pos, pos, w.Q1, text, w.Q2)
 	case fig.ShapeWithTextTypeTriangleUp:
 	case fig.ShapeWithTextTypeTriangleDown:
 	case fig.ShapeWithTextTypeRoundedRectangle:
@@ -388,8 +289,43 @@ func (c *Compiler) isStraight(start, lastPos Position, magnet fig.ConnectorMagne
 	return
 }
 
-func (c *Compiler) drawText(s *sbuf, v *fig.NodeChange) {
+func (c *Compiler) drawText(v DrawingNode) {
+	point := v.Q1
+	point.X += (v.Q2.Sub(v.Q1)).X/2.0 - 0.55
+	point.Y += (v.Q2.Sub(v.Q1)).Y / 2.0
+	c.b.Writef(`\node at (%s) {%s};`, point, strings.ReplaceAll(v.Node.Name, "_", "\\_"))
+}
 
+func (c *Compiler) drawArrowTextStraight(startPos Position, endPos Position, text string, midPoint *fig.ConnectorTextMidpoint) {
+	dir := startPos.DirectionTo(endPos)
+	pos := Position{}
+	var start, end float32
+
+	isVertical := dir == TopDirection || dir == BottomDirection
+
+	if isVertical {
+		start, end = startPos.Y, endPos.Y
+		pos.X = startPos.X
+	} else {
+		start, end = startPos.X, endPos.X
+		pos.Y = startPos.Y
+	}
+
+	length := float32(math.Abs(float64(end-start) / 2.0))
+	fPos := end - length
+
+	if midPoint.Section == fig.ConnectorTextSectionMiddleToEnd {
+		fPos += length * float32(midPoint.Offset)
+	} else {
+		fPos -= length * float32(midPoint.Offset)
+	}
+
+	if isVertical {
+		pos.Y = fPos
+	} else {
+		pos.X = fPos
+	}
+	c.b.Writef(`\node[draw=none,fill=white] at (%s) {%s};`, pos, text)
 }
 
 func directionFromMagnet(mag fig.ConnectorMagnet) Direction {
