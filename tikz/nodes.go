@@ -2,8 +2,13 @@ package tikz
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
+
+type XAdjuster interface {
+	AdjustX(offset float32)
+}
 
 type Attribute interface {
 	HasPosition() bool
@@ -19,6 +24,19 @@ func (a AttributeList) String() string {
 		allAttributes[i] = v.String()
 	}
 	return strings.Join(allAttributes, ", ")
+}
+
+func (a AttributeList) MinX() float32 {
+	minX := float32(math.MaxFloat32)
+	for _, v := range a {
+		if !v.HasPosition() {
+			continue
+		}
+		if v.GetPosition().X < minX {
+			minX = v.GetPosition().X
+		}
+	}
+	return minX
 }
 
 type ToAttribute struct{}
@@ -125,6 +143,20 @@ func (c ColorAttribute) SetPosition(p Position) {
 
 func (c ColorAttribute) String() string { return "color=" + string(c) }
 
+type DrawAttribute string
+
+func (d DrawAttribute) HasPosition() bool { return false }
+
+func (d DrawAttribute) GetPosition() Position {
+	panic("DrawAttribute has no position")
+}
+
+func (d DrawAttribute) SetPosition(p Position) {
+	panic("DrawAttribute has no position")
+}
+
+func (d DrawAttribute) String() string { return "draw=" + string(d) }
+
 type Draw struct {
 	Attributes AttributeList
 	Points     PositionList
@@ -132,7 +164,21 @@ type Draw struct {
 	Kind       *string
 }
 
-func (d Draw) String() string {
+func (d *Draw) AdjustX(offset float32) {
+	for i := range d.Points {
+		d.Points[i].X -= offset
+	}
+	for _, v := range d.Attributes {
+		if !v.HasPosition() {
+			continue
+		}
+		pos := v.GetPosition()
+		pos.X -= offset
+		v.SetPosition(pos)
+	}
+}
+
+func (d *Draw) String() string {
 	data := []string{`\draw`}
 	if len(d.Attributes) > 0 {
 		data = append(data, fmt.Sprintf("[%s]", d.Attributes.String()))
@@ -150,13 +196,58 @@ func (d Draw) String() string {
 	return strings.Join(data, "")
 }
 
+type Shape struct {
+	Attributes AttributeList
+	P1, P2     Position
+	Text       *string
+	Kind       string
+}
+
+func (s *Shape) AdjustX(offset float32) {
+	s.P1.X -= offset
+	s.P2.X -= offset
+	for _, a := range s.Attributes {
+		p := a.GetPosition()
+		p.X -= offset
+		a.SetPosition(p)
+	}
+}
+
+func (s *Shape) String() string {
+	data := []string{`\draw`}
+	if len(s.Attributes) > 0 {
+		data = append(data, fmt.Sprintf("[%s]", s.Attributes.String()))
+	}
+
+	data = append(data, fmt.Sprintf(" (%s)", s.P1))
+	data = append(data, fmt.Sprintf(" %s", s.Kind))
+	if s.Text != nil {
+		data = append(data, fmt.Sprintf(" node{%s}", *s.Text))
+	}
+	data = append(data, fmt.Sprintf(" (%s)", s.P2))
+	data = append(data, ";")
+	return strings.Join(data, "")
+}
+
 type Node struct {
 	Attributes AttributeList
 	Position   Position
 	Text       *string
 }
 
-func (n Node) String() string {
+func (n *Node) AdjustX(offset float32) {
+	n.Position.X -= offset
+	for _, a := range n.Attributes {
+		if !a.HasPosition() {
+			continue
+		}
+		pos := a.GetPosition()
+		pos.X -= offset
+		a.SetPosition(pos)
+	}
+}
+
+func (n *Node) String() string {
 	data := []string{`\node`}
 	if len(n.Attributes) > 0 {
 		data = append(data, fmt.Sprintf("[%s]", n.Attributes.String()))
@@ -176,7 +267,16 @@ type FillDraw struct {
 	Size       string
 }
 
-func (f FillDraw) String() string {
+func (f *FillDraw) AdjustX(offset float32) {
+	f.Position.X -= offset
+	for _, a := range f.Attributes {
+		pos := a.GetPosition()
+		pos.X -= offset
+		a.SetPosition(pos)
+	}
+}
+
+func (f *FillDraw) String() string {
 	data := []string{`\filldraw`}
 	if len(f.Attributes) > 0 {
 		data = append(data, fmt.Sprintf("[%s]", f.Attributes.String()))

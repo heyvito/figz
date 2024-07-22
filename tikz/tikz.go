@@ -36,11 +36,12 @@ func NewCompiler(page *fig.NodeChange, opts *CompilerOpts) string {
 }
 
 type Compiler struct {
-	b       *sbuf
-	nodes   []DrawingNode
-	nodeMap map[string]DrawingNode
-	page    *fig.NodeChange
-	opts    *CompilerOpts
+	b        *sbuf
+	nodes    []DrawingNode
+	nodeMap  map[string]DrawingNode
+	page     *fig.NodeChange
+	opts     *CompilerOpts
+	elements []fmt.Stringer
 }
 
 func (c *Compiler) FindNode(g *fig.GUID) DrawingNode {
@@ -122,12 +123,21 @@ func (c *Compiler) ConvertPageToTikz() string {
 			c.drawArrow(w)
 		}
 	}
+
+	minX := c.findMinX()
+
+	for _, v := range c.elements {
+		v.(XAdjuster).AdjustX(minX)
+		c.b.Writef(v.String())
+	}
 	c.b.Writef(`\end{tikzpicture}` + "\n")
 
 	return c.b.String()
 }
 
-func (c *Compiler) AddElement(el any) {}
+func (c *Compiler) AddElement(el fmt.Stringer) {
+	c.elements = append(c.elements, el)
+}
 
 func (c *Compiler) drawArrow(w DrawingNode) {
 	var (
@@ -142,13 +152,13 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 	)
 
 	if c.opts.DebugMagnets {
-		c.AddElement(FillDraw{
+		c.AddElement(&FillDraw{
 			Attributes: AttributeList{ColorAttribute("red")},
 			Position:   positionStart,
 			Shape:      "circle",
 			Size:       "3pt",
 		})
-		c.AddElement(FillDraw{
+		c.AddElement(&FillDraw{
 			Attributes: AttributeList{ColorAttribute("red")},
 			Position:   positionEnd,
 			Shape:      "circle",
@@ -156,7 +166,7 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 		})
 	}
 
-	var points []string
+	var points []Position
 
 	if v.ConnectorControlPoints != nil {
 		if c.opts.DebugControlPoints {
@@ -165,7 +175,7 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 					X: float32(con.Position.X) * scale,
 					Y: float32(con.Position.Y) * scale,
 				}
-				c.AddElement(FillDraw{
+				c.AddElement(&FillDraw{
 					Attributes: AttributeList{ColorAttribute("red")},
 					Position:   pos,
 					Shape:      "blue",
@@ -174,7 +184,7 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 			}
 		}
 		curPos := positionStart
-		points = append(points, fmt.Sprintf("(%s)", positionStart))
+		points = append(points, positionStart)
 		completePath := []Position{positionStart}
 
 		for _, con := range v.ConnectorControlPoints {
@@ -191,23 +201,32 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 				}
 			}
 			completePath = append(completePath, newPos)
-			points = append(points, fmt.Sprintf(`(%s)`, newPos))
+			points = append(points, newPos)
 			curPos = newPos
 		}
 		rawPos := v.ConnectorControlPoints[len(v.ConnectorControlPoints)-1].Position
 		lastPos := Position{float32(rawPos.X), float32(rawPos.Y)}
 		lastPos.X *= scale
 		lastPos.Y *= scale
-		points = append(points, fmt.Sprintf(`(%s)`, lastPos))
-		allPoints := strings.Join(points, " -- ")
-		c.b.Writef(`\draw [thick, rounded corners=10] %s;`, allPoints)
+		points = append(points, lastPos)
+		c.AddElement(&Draw{
+			Attributes: AttributeList{&ThickAttribute{}, &RoundedCornersAttribute{10}},
+			Points:     points,
+			Text:       nil,
+			Kind:       nil,
+		})
 		straight := c.isStraight(curPos, lastPos, magnetTo)
 
 		completePath = append(completePath, lastPos)
 
 		if straight {
 			completePath = append(completePath, positionEnd)
-			c.b.Writef(`\draw[-To, thick] (%s) -- (%s);`, lastPos, positionEnd)
+			c.AddElement(&Draw{
+				Attributes: AttributeList{&ToAttribute{}, &ThickAttribute{}},
+				Points:     []Position{lastPos, positionEnd},
+				Text:       nil,
+				Kind:       nil,
+			})
 		} else {
 			midPath := Position{
 				X: positionEnd.X,
@@ -220,8 +239,18 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 				finalPosition.Y += 0.3
 			}
 			completePath = append(completePath, midPath, positionEnd)
-			c.b.Writef(`\draw [thick, rounded corners=10] (%s) -- (%s) -- (%s); %% midpoint`, lastPos, midPath, finalPosition)
-			c.b.Writef(`\draw[-To, thick] (%s) -- (%s);`, finalPosition, positionEnd)
+			c.AddElement(&Draw{
+				Attributes: AttributeList{&ThickAttribute{}, &RoundedCornersAttribute{10}},
+				Points:     []Position{lastPos, midPath, finalPosition},
+				Text:       nil,
+				Kind:       nil,
+			})
+			c.AddElement(&Draw{
+				Attributes: AttributeList{&ToAttribute{}, &ThickAttribute{}},
+				Points:     []Position{finalPosition, positionEnd},
+				Text:       nil,
+				Kind:       nil,
+			})
 		}
 
 		if connectorText != "" {
@@ -252,9 +281,15 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 			X: x2,
 		}
 
-		c.b.Writef(`\draw[-To, thick, rounded corners=10] (%s) -- (%s) -- (%s) -- (%s);`, positionStart, cp1, cp2, positionEnd)
+		c.AddElement(&Draw{
+			Attributes: AttributeList{&ToAttribute{}, &ThickAttribute{}, &RoundedCornersAttribute{10}},
+			Points:     []Position{positionStart, cp1, cp2, positionEnd},
+		})
 	} else {
-		c.b.Writef(`\draw[-To, thick] (%s) -- (%s);`, positionStart, positionEnd)
+		c.AddElement(&Draw{
+			Attributes: AttributeList{&ToAttribute{}, &ThickAttribute{}},
+			Points:     []Position{positionStart, positionEnd},
+		})
 
 		if len(connectorText) != 0 {
 			midPoint := v.ConnectorTextMidpoint
@@ -263,17 +298,83 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 	}
 }
 
+func (c *Compiler) findMinX() float32 {
+	minX := float32(math.MaxFloat32)
+	for _, v := range c.elements {
+		switch t := v.(type) {
+		case *Draw:
+			hasMinAttr := t.Attributes != nil
+			minAttrX := float32(math.MaxFloat32)
+			if hasMinAttr {
+				minAttrX = t.Attributes.MinX()
+			}
+			theMin := float32(math.MaxFloat32)
+			for _, p := range t.Points {
+				if p.X < theMin {
+					theMin = p.X
+				}
+			}
+			theMin = min(minAttrX, theMin)
+			if theMin < minX {
+				minX = theMin
+			}
+		case *Shape:
+			hasMinAttr := t.Attributes != nil
+			minAttrX := float32(math.MaxFloat32)
+			if hasMinAttr {
+				minAttrX = t.Attributes.MinX()
+			}
+			theMin := min(minAttrX, t.P1.X)
+			if theMin < minX {
+				minX = theMin
+			}
+		case *Node:
+			hasMinAttr := t.Attributes != nil
+			minAttrX := float32(math.MaxFloat32)
+			if hasMinAttr {
+				minAttrX = t.Attributes.MinX()
+			}
+			theMin := min(minAttrX, t.Position.X)
+			if theMin < minX {
+				minX = theMin
+			}
+		case *FillDraw:
+			hasMinAttr := t.Attributes != nil
+			minAttrX := float32(math.MaxFloat32)
+			if hasMinAttr {
+				minAttrX = t.Attributes.MinX()
+			}
+			theMin := min(minAttrX, t.Position.X)
+			if theMin < minX {
+				minX = theMin
+			}
+		}
+	}
+	return minX
+}
+
 func (c *Compiler) drawShapeWithText(w DrawingNode) {
 	text := c.CleanupText(w.Node.Name)
 
 	switch w.Node.ShapeWithTextType {
 	case fig.ShapeWithTextTypeSquare, fig.ShapeWithTextTypePredefinedProcess:
-		c.b.Writef(`\draw (%s) rectangle node{%s} (%s);`, w.Q1, text, w.Q2)
+		c.AddElement(&Shape{
+			P1:   w.Q1,
+			P2:   w.Q2,
+			Text: &text,
+			Kind: "rectangle",
+		})
 
 	case fig.ShapeWithTextTypeEllipse:
 	case fig.ShapeWithTextTypeDiamond:
 		pos := w.Q1.MiddleWith(w.Q2)
-		c.b.Writef(`\draw[rotate around={45:(%s)}, scale around={0.75:(%s)}] (%s) rectangle node{%s} (%s);`, pos, pos, w.Q1, text, w.Q2)
+		c.AddElement(&Shape{
+			Attributes: AttributeList{&RotateAroundAttribute{45, pos}, &ScaleAroundAttribute{0.75, pos}},
+			P1:         w.Q1,
+			P2:         w.Q2,
+			Text:       &text,
+			Kind:       "rectangle",
+		})
 	case fig.ShapeWithTextTypeTriangleUp:
 	case fig.ShapeWithTextTypeTriangleDown:
 	case fig.ShapeWithTextTypeRoundedRectangle:
@@ -339,7 +440,11 @@ func (c *Compiler) drawText(v DrawingNode) {
 	point := v.Q1
 	point.X += (v.Q2.Sub(v.Q1)).X/2.0 - 0.55
 	point.Y += (v.Q2.Sub(v.Q1)).Y / 2.0
-	c.b.Writef(`\node at (%s) {%s};`, point, strings.ReplaceAll(v.Node.Name, "_", "\\_"))
+	text := strings.ReplaceAll(v.Node.Name, "_", "\\_")
+	c.AddElement(&Node{
+		Position: point,
+		Text:     &text,
+	})
 }
 
 func (c *Compiler) drawArrowTextStraight(startPos Position, endPos Position, text string, midPoint *fig.ConnectorTextMidpoint) {
@@ -371,7 +476,12 @@ func (c *Compiler) drawArrowTextStraight(startPos Position, endPos Position, tex
 	} else {
 		pos.X = fPos
 	}
-	c.b.Writef(`\node[draw=none,fill=white] at (%s) {%s};`, pos, text)
+
+	c.AddElement(&Node{
+		Attributes: AttributeList{DrawAttribute("none"), &FillAttribute{"white"}},
+		Position:   pos,
+		Text:       &text,
+	})
 }
 
 func (c *Compiler) drawArrowTextComplex(path []Position, text string, midpoint *fig.ConnectorTextMidpoint) {
@@ -447,7 +557,11 @@ func (c *Compiler) drawArrowTextComplex(path []Position, text string, midpoint *
 					y = current.Y
 				}
 			}
-			c.b.Writef(`\node[draw=none,fill=white] at (%s) {%s};`, Position{x, y}, text)
+			c.AddElement(&Node{
+				Attributes: AttributeList{DrawAttribute("none"), &FillAttribute{"white"}},
+				Position:   Position{x, y},
+				Text:       &text,
+			})
 			return
 		}
 
