@@ -1,6 +1,9 @@
 package tikz
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type Position struct {
 	X, Y float32
@@ -46,4 +49,14 @@ func (p Position) DirectionTo(pos Position) Direction {
 
 func (p Position) Sub(pos Position) Position {
 	return Position{p.X - pos.X, p.Y - pos.Y}
+}
+
+type PositionList []Position
+
+func (p PositionList) String() string {
+	positions := make([]string, len(p))
+	for i, pos := range p {
+		positions[i] = "(" + pos.String() + ")"
+	}
+	return strings.Join(positions, " -- ")
 }

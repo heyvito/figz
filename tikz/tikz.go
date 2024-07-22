@@ -3,8 +3,8 @@ package tikz
 import (
 	"figz/fig"
 	"fmt"
-	"github.com/heyvito/carrows"
 	"math"
+	"slices"
 	"strings"
 )
 
@@ -80,17 +80,17 @@ func (c *Compiler) PositionForNode(node DrawingNode, magnet fig.ConnectorMagnet)
 	return
 }
 
-func (c *Compiler) MagnetToCarrow(magnet fig.ConnectorMagnet) carrows.RectSide {
+func (c *Compiler) MagnetToDirection(magnet fig.ConnectorMagnet) Direction {
 	switch magnet {
 	case fig.ConnectorMagnetNone, fig.ConnectorMagnetAutoHorizontal,
 		fig.ConnectorMagnetAuto, fig.ConnectorMagnetCenter, fig.ConnectorMagnetTop:
-		return carrows.Top
+		return TopDirection
 	case fig.ConnectorMagnetLeft:
-		return carrows.Left
+		return LeftDirection
 	case fig.ConnectorMagnetBottom:
-		return carrows.Bottom
+		return BottomDirection
 	case fig.ConnectorMagnetRight:
-		return carrows.Right
+		return RightDirection
 	default:
 		panic("unreachable")
 	}
@@ -127,6 +127,8 @@ func (c *Compiler) ConvertPageToTikz() string {
 	return c.b.String()
 }
 
+func (c *Compiler) AddElement(el any) {}
+
 func (c *Compiler) drawArrow(w DrawingNode) {
 	var (
 		v             = w.Node
@@ -140,8 +142,18 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 	)
 
 	if c.opts.DebugMagnets {
-		c.b.Writef(`\filldraw[color=red] (%s) circle (3pt);`, positionStart)
-		c.b.Writef(`\filldraw[color=red] (%s) circle (3pt);`, positionEnd)
+		c.AddElement(FillDraw{
+			Attributes: AttributeList{ColorAttribute("red")},
+			Position:   positionStart,
+			Shape:      "circle",
+			Size:       "3pt",
+		})
+		c.AddElement(FillDraw{
+			Attributes: AttributeList{ColorAttribute("red")},
+			Position:   positionEnd,
+			Shape:      "circle",
+			Size:       "3pt",
+		})
 	}
 
 	var points []string
@@ -153,11 +165,17 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 					X: float32(con.Position.X) * scale,
 					Y: float32(con.Position.Y) * scale,
 				}
-				c.b.Writef(`\filldraw[color=blue] (%s) circle (3pt);`, pos)
+				c.AddElement(FillDraw{
+					Attributes: AttributeList{ColorAttribute("red")},
+					Position:   pos,
+					Shape:      "blue",
+					Size:       "3pt",
+				})
 			}
 		}
 		curPos := positionStart
 		points = append(points, fmt.Sprintf("(%s)", positionStart))
+		completePath := []Position{positionStart}
 
 		for _, con := range v.ConnectorControlPoints {
 			var newPos Position
@@ -172,6 +190,7 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 					Y: curPos.Y,
 				}
 			}
+			completePath = append(completePath, newPos)
 			points = append(points, fmt.Sprintf(`(%s)`, newPos))
 			curPos = newPos
 		}
@@ -181,10 +200,13 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 		lastPos.Y *= scale
 		points = append(points, fmt.Sprintf(`(%s)`, lastPos))
 		allPoints := strings.Join(points, " -- ")
-		c.b.Writef(`\draw [thick, rounded corners] %s;`, allPoints)
+		c.b.Writef(`\draw [thick, rounded corners=10] %s;`, allPoints)
 		straight := c.isStraight(curPos, lastPos, magnetTo)
 
+		completePath = append(completePath, lastPos)
+
 		if straight {
+			completePath = append(completePath, positionEnd)
 			c.b.Writef(`\draw[-To, thick] (%s) -- (%s);`, lastPos, positionEnd)
 		} else {
 			midPath := Position{
@@ -192,21 +214,45 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 				Y: lastPos.Y,
 			}
 			finalPosition := positionEnd
-			finalPosition.Y += 0.3
-			c.b.Writef(`\draw [thick, rounded corners] (%s) -- (%s) -- (%s); %% midpoint`, lastPos, midPath, finalPosition)
+			if lastPos.Y <= finalPosition.Y {
+				finalPosition.Y -= 0.3
+			} else {
+				finalPosition.Y += 0.3
+			}
+			completePath = append(completePath, midPath, positionEnd)
+			c.b.Writef(`\draw [thick, rounded corners=10] (%s) -- (%s) -- (%s); %% midpoint`, lastPos, midPath, finalPosition)
 			c.b.Writef(`\draw[-To, thick] (%s) -- (%s);`, finalPosition, positionEnd)
 		}
 
+		if connectorText != "" {
+			c.drawArrowTextComplex(completePath, connectorText, v.ConnectorTextMidpoint)
+		}
+
 	} else if c.IsArrowDiagonal(positionStart, positionEnd) {
+		midPoint := float32(math.Abs(float64(positionStart.X-positionEnd.X))) / 2.0
 
-		arr := carrows.GetArrow(float64(positionStart.X), float64(positionStart.Y), float64(positionEnd.X), float64(positionEnd.Y), &carrows.Opts{
-			ControlPointStretch: 1.8,
-			AllowedStartSides:   []carrows.RectSide{c.MagnetToCarrow(magnetFrom)},
-			AllowedEndSides:     []carrows.RectSide{c.MagnetToCarrow(magnetTo)},
-		})
-		c.b.Writef(`\draw[-To, thick] (%f, %f) .. controls (%f,%f) and (%f,%f) .. (%f, %f);`,
-			arr.Sx, arr.Sy, arr.C1x, arr.C1y, arr.C2x, arr.C2y, arr.Ex, arr.Ey)
+		var x1, x2 float32
+		switch positionStart.DirectionTo(positionEnd) {
+		case RightDirection:
+			x1 = positionStart.X + midPoint
+			x2 = positionEnd.X - midPoint
+		case LeftDirection:
+			x1 = positionStart.X - midPoint
+			x2 = positionEnd.X + midPoint
+		case TopDirection:
+		case BottomDirection:
+		}
+		cp1 := Position{
+			Y: positionStart.Y,
+			X: x1,
+		}
 
+		cp2 := Position{
+			Y: positionEnd.Y,
+			X: x2,
+		}
+
+		c.b.Writef(`\draw[-To, thick, rounded corners=10] (%s) -- (%s) -- (%s) -- (%s);`, positionStart, cp1, cp2, positionEnd)
 	} else {
 		c.b.Writef(`\draw[-To, thick] (%s) -- (%s);`, positionStart, positionEnd)
 
@@ -326,6 +372,87 @@ func (c *Compiler) drawArrowTextStraight(startPos Position, endPos Position, tex
 		pos.X = fPos
 	}
 	c.b.Writef(`\node[draw=none,fill=white] at (%s) {%s};`, pos, text)
+}
+
+func (c *Compiler) drawArrowTextComplex(path []Position, text string, midpoint *fig.ConnectorTextMidpoint) {
+	if len(path)%2 != 0 {
+		panic("odd number of path segments?")
+	}
+
+	if midpoint == nil {
+		midpoint = &fig.ConnectorTextMidpoint{
+			Section:       fig.ConnectorTextSectionMiddleToStart,
+			Offset:        0,
+			OffAxisOffset: 0,
+		}
+	}
+
+	totalLen := float32(0.0)
+	for i := 1; i < len(path); i += 1 {
+		last := path[i-1]
+		current := path[i]
+		if last.Y == current.Y {
+			totalLen += float32(math.Abs(float64(current.X - last.X)))
+		} else {
+			totalLen += float32(math.Abs(float64(current.Y - last.Y)))
+		}
+	}
+
+	midPoint := totalLen / 2.0
+	var positionInLen float32
+	if midpoint.Section == fig.ConnectorTextSectionMiddleToEnd { // 1 == end, 0 = middle
+		positionInLen = totalLen - midPoint*float32(midpoint.Offset)
+	} else { // 1 = start, 0 = middle
+		positionInLen = midPoint * float32(midpoint.Offset)
+	}
+
+	var totalRan float32
+	var finalPaths = append([]Position{}, path...)
+	if midpoint.Section == fig.ConnectorTextSectionMiddleToEnd {
+		slices.Reverse(finalPaths)
+	}
+	for i := 1; i < len(finalPaths); i += 1 {
+		var last, current Position
+		if midpoint.Section == fig.ConnectorTextSectionMiddleToEnd {
+			last = finalPaths[i]
+			current = finalPaths[i-1]
+		} else {
+			last = finalPaths[i-1]
+			current = finalPaths[i]
+		}
+
+		var lineLen float32
+		if last.Y == current.Y {
+			lineLen = float32(math.Abs(float64(current.X - last.X)))
+		} else {
+			lineLen = float32(math.Abs(float64(current.Y - last.Y)))
+		}
+
+		if positionInLen > totalRan && positionInLen < totalRan+lineLen {
+			var x, y float32
+			if midpoint.Section == fig.ConnectorTextSectionMiddleToEnd { // 1 == end, 0 = middle
+				if last.Y == current.Y {
+					y = current.Y - positionInLen - totalRan
+					x = current.X
+				} else {
+					x = current.X - positionInLen - totalRan
+					y = current.Y
+				}
+			} else {
+				if last.Y == current.Y {
+					y = current.Y - positionInLen - totalRan
+					x = current.X
+				} else {
+					x = current.X + positionInLen - totalRan
+					y = current.Y
+				}
+			}
+			c.b.Writef(`\node[draw=none,fill=white] at (%s) {%s};`, Position{x, y}, text)
+			return
+		}
+
+		totalRan += lineLen
+	}
 }
 
 func directionFromMagnet(mag fig.ConnectorMagnet) Direction {
