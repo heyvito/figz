@@ -6,11 +6,12 @@ import (
 )
 
 type Position struct {
-	X, Y float32
+	X, Y         float32
+	XFunc, YFunc string
 }
 
 func (p Position) Sum(p2 Position) Position {
-	return Position{p.X + p2.X, p.Y + p2.Y}
+	return Position{X: p.X + p2.X, Y: p.Y + p2.Y}
 }
 
 func (p Position) MiddleWith(p2 Position) Position {
@@ -21,11 +22,22 @@ func (p Position) MiddleWith(p2 Position) Position {
 }
 
 func (p Position) String() string {
-	return fmt.Sprintf("%f, %f", p.X, p.Y)
+	var x, y string
+	if p.XFunc != "" {
+		x = fmt.Sprintf("%f%s", p.X, p.XFunc)
+	} else {
+		x = fmt.Sprintf("%f", p.X)
+	}
+	if p.YFunc != "" {
+		y = fmt.Sprintf("%f%s", p.Y, p.YFunc)
+	} else {
+		y = fmt.Sprintf("%f", p.Y)
+	}
+	return fmt.Sprintf("%s, %s", x, y)
 }
 
 func (p Position) Diff(of Position) Position {
-	return Position{p.X - of.X, p.Y - of.Y}
+	return Position{X: p.X - of.X, Y: p.Y - of.Y}
 }
 
 func (p Position) DirectionTo(pos Position) Direction {
@@ -48,7 +60,7 @@ func (p Position) DirectionTo(pos Position) Direction {
 }
 
 func (p Position) Sub(pos Position) Position {
-	return Position{p.X - pos.X, p.Y - pos.Y}
+	return Position{X: p.X - pos.X, Y: p.Y - pos.Y}
 }
 
 type PositionList []Position

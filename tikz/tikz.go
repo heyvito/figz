@@ -205,7 +205,7 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 			curPos = newPos
 		}
 		rawPos := v.ConnectorControlPoints[len(v.ConnectorControlPoints)-1].Position
-		lastPos := Position{float32(rawPos.X), float32(rawPos.Y)}
+		lastPos := Position{X: float32(rawPos.X), Y: float32(rawPos.Y)}
 		lastPos.X *= scale
 		lastPos.Y *= scale
 		points = append(points, lastPos)
@@ -484,89 +484,73 @@ func (c *Compiler) drawArrowTextStraight(startPos Position, endPos Position, tex
 	})
 }
 
-func (c *Compiler) drawArrowTextComplex(path []Position, text string, midpoint *fig.ConnectorTextMidpoint) {
-	if len(path)%2 != 0 {
-		panic("odd number of path segments?")
-	}
-
-	if midpoint == nil {
-		midpoint = &fig.ConnectorTextMidpoint{
-			Section:       fig.ConnectorTextSectionMiddleToStart,
-			Offset:        0,
-			OffAxisOffset: 0,
-		}
-	}
-
-	totalLen := float32(0.0)
-	for i := 1; i < len(path); i += 1 {
+func (c *Compiler) drawArrowTextComplex(path []Position, text string, connectorMid *fig.ConnectorTextMidpoint) {
+	totalLength := float32(0)
+	for i := 1; i < len(path); i++ {
 		last := path[i-1]
+		curr := path[i]
+		var l float32
+		if last.Y == curr.Y {
+			l = float32(math.Abs(float64(curr.X - last.X)))
+		} else {
+			l = float32(math.Abs(float64(curr.Y - last.Y)))
+		}
+		totalLength += l
+	}
+
+	middlePoint := totalLength / 2.0
+	offset := middlePoint * float32(math.Abs(connectorMid.Offset-1.0))
+	if connectorMid.Section == fig.ConnectorTextSectionMiddleToEnd {
+		slices.Reverse(path)
+	}
+
+	textPos := Position{}
+	isVertical := false
+	for i := 1; i < len(path); i++ {
+		prev := path[i-1]
 		current := path[i]
-		if last.Y == current.Y {
-			totalLen += float32(math.Abs(float64(current.X - last.X)))
-		} else {
-			totalLen += float32(math.Abs(float64(current.Y - last.Y)))
-		}
-	}
+		var distance float32
+		if prev.X == current.X {
+			distance = float32(math.Abs(float64(current.Y - prev.Y)))
+			textPos.X = current.X
+			isVertical = true
 
-	midPoint := totalLen / 2.0
-	var positionInLen float32
-	if midpoint.Section == fig.ConnectorTextSectionMiddleToEnd { // 1 == end, 0 = middle
-		positionInLen = totalLen - midPoint*float32(midpoint.Offset)
-	} else { // 1 = start, 0 = middle
-		positionInLen = midPoint * float32(midpoint.Offset)
-	}
-
-	var totalRan float32
-	var finalPaths = append([]Position{}, path...)
-	if midpoint.Section == fig.ConnectorTextSectionMiddleToEnd {
-		slices.Reverse(finalPaths)
-	}
-	for i := 1; i < len(finalPaths); i += 1 {
-		var last, current Position
-		if midpoint.Section == fig.ConnectorTextSectionMiddleToEnd {
-			last = finalPaths[i]
-			current = finalPaths[i-1]
-		} else {
-			last = finalPaths[i-1]
-			current = finalPaths[i]
-		}
-
-		var lineLen float32
-		if last.Y == current.Y {
-			lineLen = float32(math.Abs(float64(current.X - last.X)))
-		} else {
-			lineLen = float32(math.Abs(float64(current.Y - last.Y)))
-		}
-
-		if positionInLen > totalRan && positionInLen < totalRan+lineLen {
-			var x, y float32
-			if midpoint.Section == fig.ConnectorTextSectionMiddleToEnd { // 1 == end, 0 = middle
-				if last.Y == current.Y {
-					y = current.Y - positionInLen - totalRan
-					x = current.X
-				} else {
-					x = current.X - positionInLen - totalRan
-					y = current.Y
-				}
+			if current.Y > prev.Y {
+				textPos.Y = prev.Y + offset
 			} else {
-				if last.Y == current.Y {
-					y = current.Y - positionInLen - totalRan
-					x = current.X
-				} else {
-					x = current.X + positionInLen - totalRan
-					y = current.Y
-				}
+				textPos.Y = prev.Y - offset
 			}
-			c.AddElement(&Node{
-				Attributes: AttributeList{DrawAttribute("none"), &FillAttribute{"white"}},
-				Position:   Position{x, y},
-				Text:       &text,
-			})
-			return
+
+		} else {
+			distance = float32(math.Abs(float64(current.X - prev.X)))
+			textPos.Y = current.Y
+			isVertical = false
+
+			if current.X > prev.X {
+				textPos.X = prev.X + offset
+			} else {
+				textPos.X = prev.X - offset
+			}
 		}
 
-		totalRan += lineLen
+		if distance > offset {
+			break
+		}
+
+		offset = offset - distance
 	}
+
+	attrs := AttributeList{DrawAttribute("none"), &FillAttribute{"white"}}
+	if isVertical {
+		attrs = append(attrs, AnchorAttribute("south"))
+	}
+
+	c.AddElement(&Node{
+		Attributes: attrs,
+		Position:   textPos,
+		Text:       &text,
+	})
+
 }
 
 func directionFromMagnet(mag fig.ConnectorMagnet) Direction {

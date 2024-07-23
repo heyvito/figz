@@ -157,6 +157,22 @@ func (d DrawAttribute) SetPosition(p Position) {
 
 func (d DrawAttribute) String() string { return "draw=" + string(d) }
 
+type AnchorAttribute string
+
+func (a AnchorAttribute) HasPosition() bool { return false }
+
+func (a AnchorAttribute) GetPosition() Position {
+	panic("AnchorAttribute has no position")
+}
+
+func (a AnchorAttribute) SetPosition(p Position) {
+	panic("AnchorAttribute has no position")
+}
+
+func (a AnchorAttribute) String() string {
+	return fmt.Sprintf("anchor=%s", string(a))
+}
+
 type Draw struct {
 	Attributes AttributeList
 	Points     PositionList

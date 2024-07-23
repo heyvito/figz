@@ -60,9 +60,9 @@ func MakeDrawingNode(v *fig.NodeChange) DrawingNode {
 		m12 = float32(v.Transform.M12) * scale
 	)
 
-	var p2 = Position{float32(v.Size.X) * scale, float32(v.Size.Y) * scale}
-	var q1 = Position{m00*0 + m01*0 + m02, m10*0 + m11*0 + m12}
-	var q2 = Position{m00*p2.X + m01*p2.Y + m02, m10*p2.X + m11*p2.Y + m12}
+	var p2 = Position{X: float32(v.Size.X) * scale, Y: float32(v.Size.Y) * scale}
+	var q1 = Position{X: m00*0 + m01*0 + m02, Y: m10*0 + m11*0 + m12}
+	var q2 = Position{X: m00*p2.X + m01*p2.Y + m02, Y: m10*p2.X + m11*p2.Y + m12}
 
 	return DrawingNode{
 		Node: v,
