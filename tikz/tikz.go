@@ -1,17 +1,19 @@
 package tikz
 
 import (
-	"figz/fig"
 	"fmt"
+	"github.com/heyvito/figz/fig"
 	"math"
 	"strings"
 )
 
 const scale = float32(0.018)
+const VERSION = "v0.1"
 
 type CompilerOpts struct {
 	DebugMagnets       bool
 	DebugControlPoints bool
+	FilePath           string
 }
 
 func NewCompiler(page *fig.NodeChange, opts *CompilerOpts) string {
@@ -96,20 +98,23 @@ func (c *Compiler) MagnetToDirection(magnet fig.ConnectorMagnet) Direction {
 	}
 }
 
-var weirdThings = map[string]struct{}{
+var emptyComponentNames = map[string]struct{}{
 	"Connector Name":  {},
 	"Shape with text": {},
 	"Connector line":  {},
 }
 
 func (c *Compiler) CleanupText(t string) string {
-	if _, ok := weirdThings[t]; ok {
+	if _, ok := emptyComponentNames[t]; ok {
 		return ""
 	}
 	return t
 }
 
 func (c *Compiler) ConvertPageToTikz() string {
+	c.b.Writef("%% This file was generated automatically by figz %s. https://github.com/heyvito/figz", VERSION)
+	c.b.Writef("%% Input file: %s", c.opts.FilePath)
+
 	c.b.Writef("\\begin{tikzpicture}[yscale=-1]")
 	for _, v := range c.page.Children {
 		w := MakeDrawingNode(v)

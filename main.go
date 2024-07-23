@@ -2,114 +2,88 @@ package main
 
 import (
 	"bytes"
-	"cmp"
-	"compress/flate"
-	"encoding/binary"
-	"figz/fig"
-	"figz/tikz"
-	"github.com/heyvito/gokiwi"
-	"slices"
-
-	//"figz/fig"
 	"fmt"
+	"github.com/heyvito/figz/decoder"
+	"github.com/heyvito/figz/tikz"
+	"github.com/urfave/cli/v2"
 	"io"
 	"os"
+	"strings"
 )
 
-type View struct {
-	buffer []byte
-	cursor int
-}
-
-var enc = binary.LittleEndian
-
-func (v *View) Uint32(at int) uint32 {
-	return enc.Uint32(v.buffer[at:])
-}
-
-type Document struct {
-	Version uint32
-	Root    *fig.NodeChange
-	Blobs   []*fig.Blob
+func expandTilde(path string) string {
+	if !strings.HasPrefix(path, "~") {
+		return path
+	}
+	return strings.Replace(path, "~", os.Getenv("HOME"), 1)
 }
 
 func main() {
-	path := "/Users/vitosartori/Downloads/fml/canvas.fig"
-	data, err := os.ReadFile(path)
-	if err != nil {
+	app := cli.App{
+		Name:        "figz",
+		HelpName:    "figz",
+		Usage:       "figz [OPTIONS] PATH",
+		Version:     tikz.VERSION,
+		Description: "Converts figjam files into tikz pictures",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:      "output",
+				Usage:     "Path to write the generated tikz picture",
+				Required:  false,
+				Value:     "",
+				Aliases:   []string{"o"},
+				TakesFile: true,
+			},
+		},
+		Action: run,
+		Authors: []*cli.Author{
+			{
+				Name:  "Vito Sartori",
+				Email: "hey@vito.io",
+			},
+			{
+				Name:  "Felipe Mariotti",
+				Email: "felipe.mtt95@gmail.com",
+			},
+		},
+		Copyright: "Copyright (c) 2024 Vito Sartori",
+	}
+
+	if err := app.Run(os.Args); err != nil {
 		panic(err)
 	}
+}
 
-	header := data[0:8]
-	if string(header) != "fig-jam." {
-		panic("Invalid header")
+func run(c *cli.Context) error {
+	if c.NArg() == 0 {
+		return cli.ShowAppHelp(c)
 	}
 
-	v := View{buffer: data}
-	version := v.Uint32(8)
-	var chunks [][]byte
-	offset := 12
-
-	for offset < len(data) {
-		chunkSize := v.Uint32(offset)
-		offset += 4
-		chunks = append(chunks, data[offset:offset+int(chunkSize)])
-		offset += int(chunkSize)
-	}
-
-	if len(chunks) < 2 {
-		panic("Not enough chunks")
-	}
-
-	//fmt.Printf("Version: %d\n", version)
-	//fmt.Printf("Chunk count: %d\n", len(chunks))
-
-	zr := flate.NewReader(bytes.NewReader(chunks[1]))
-	encodedData, err := io.ReadAll(zr)
+	input := expandTilde(c.Args().Get(0))
+	doc, err := decoder.Decode(input)
 	if err != nil {
-		panic("Failed decoding chunk 1: " + err.Error())
+		_, _ = fmt.Fprintf(os.Stderr, "Failed decoding input file %s: %s\n", input, err)
+		os.Exit(1)
 	}
 
-	struc, err := fig.DecodeMessage(gokiwi.NewBuffer(encodedData))
+	var output io.WriteCloser
+	if c.IsSet("output") {
+		output, err = os.OpenFile(expandTilde(c.String("output")), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Failed opening output file: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		output = os.Stdout
+	}
+
+	str := tikz.NewCompiler(doc.Root.Children[1], &tikz.CompilerOpts{
+		FilePath: input,
+	})
+	_, err = io.Copy(output, bytes.NewBufferString(str))
 	if err != nil {
-		panic(err)
+		_, _ = fmt.Fprintf(os.Stderr, "Failed writing output file: %v\n", err)
 	}
-
-	nodeChanges, blobs := struc.NodeChanges, struc.Blobs
-	nodes := map[string]*fig.NodeChange{}
-
-	for _, node := range nodeChanges {
-		nodes[fmt.Sprintf("%d:%d", node.Guid.SessionId, node.Guid.LocalId)] = node
-	}
-
-	for _, node := range nodeChanges {
-		if node.ParentIndex != nil {
-			sessionID, localID := node.ParentIndex.Guid.SessionId, node.ParentIndex.Guid.LocalId
-			parent, ok := nodes[fmt.Sprintf("%d:%d", sessionID, localID)]
-			if ok {
-				parent.Children = append(parent.Children, node)
-			}
-		}
-	}
-
-	for _, node := range nodeChanges {
-		if node.Children != nil {
-			slices.SortFunc(node.Children, func(a, b *fig.NodeChange) int {
-				return cmp.Compare(b.ParentIndex.Position, a.ParentIndex.Position)
-			})
-		}
-	}
-
-	for _, node := range nodes {
-		node.ParentIndex = nil
-	}
-
-	doc := &Document{
-		Version: version,
-		Root:    nodes["0:0"],
-		Blobs:   blobs,
-	}
-
-	str := tikz.NewCompiler(doc.Root.Children[1], nil)
-	fmt.Println(str)
+	_ = output.Close()
+	return nil
 }

@@ -1,6 +1,6 @@
 package tikz
 
-import "figz/fig"
+import "github.com/heyvito/figz/fig"
 
 type DrawingNode struct {
 	Node *fig.NodeChange
