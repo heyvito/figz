@@ -4,7 +4,6 @@ import (
 	"figz/fig"
 	"fmt"
 	"math"
-	"slices"
 	"strings"
 )
 
@@ -499,59 +498,108 @@ func (c *Compiler) drawArrowTextComplex(path []Position, text string, connectorM
 	}
 
 	middlePoint := totalLength / 2.0
-	offset := middlePoint * float32(math.Abs(connectorMid.Offset-1.0))
-	if connectorMid.Section == fig.ConnectorTextSectionMiddleToEnd {
-		slices.Reverse(path)
-	}
+	textOffset := middlePoint * float32(connectorMid.Offset)
 
-	textPos := Position{}
-	isVertical := false
+	ran := float32(0)
+	var prev, curr Position
+	var axis Axis
 	for i := 1; i < len(path); i++ {
-		prev := path[i-1]
-		current := path[i]
-		var distance float32
-		if prev.X == current.X {
-			distance = float32(math.Abs(float64(current.Y - prev.Y)))
-			textPos.X = current.X
-			isVertical = true
-
-			if current.Y > prev.Y {
-				textPos.Y = prev.Y + offset
-			} else {
-				textPos.Y = prev.Y - offset
-			}
-
+		prev = path[i-1]
+		curr = path[i]
+		if axis = prev.AxisRelativeTo(curr); axis == AxisY {
+			ran += float32(math.Abs(float64(curr.Y - prev.Y)))
 		} else {
-			distance = float32(math.Abs(float64(current.X - prev.X)))
-			textPos.Y = current.Y
-			isVertical = false
-
-			if current.X > prev.X {
-				textPos.X = prev.X + offset
-			} else {
-				textPos.X = prev.X - offset
-			}
+			ran += float32(math.Abs(float64(curr.X - prev.X)))
 		}
-
-		if distance > offset {
+		if ran > textOffset {
 			break
 		}
-
-		offset = offset - distance
 	}
 
-	attrs := AttributeList{DrawAttribute("none"), &FillAttribute{"white"}}
-	if isVertical {
-		attrs = append(attrs, AnchorAttribute("south"))
+	var textPos Position
+	if axis == AxisX {
+		textPos.X = curr.X
+		textPos.Y = middlePoint + textOffset
+	} else {
+		textPos.X = ran - float32(math.Abs(float64(curr.X-prev.X))) + textOffset*float32(connectorMid.Offset)
+		textPos.Y = prev.Y
 	}
 
 	c.AddElement(&Node{
-		Attributes: attrs,
+		Attributes: AttributeList{DrawAttribute("none"), &FillAttribute{"white"}},
 		Position:   textPos,
 		Text:       &text,
 	})
-
 }
+
+//func (c *Compiler) drawArrowTextComplex(path []Position, text string, connectorMid *fig.ConnectorTextMidpoint) {
+//	totalLength := float32(0)
+//	for i := 1; i < len(path); i++ {
+//		last := path[i-1]
+//		curr := path[i]
+//		var l float32
+//		if last.Y == curr.Y {
+//			l = float32(math.Abs(float64(curr.X - last.X)))
+//		} else {
+//			l = float32(math.Abs(float64(curr.Y - last.Y)))
+//		}
+//		totalLength += l
+//	}
+//
+//	middlePoint := totalLength / 2.0
+//	offset := middlePoint * float32(math.Abs(connectorMid.Offset-1.0))
+//	if connectorMid.Section == fig.ConnectorTextSectionMiddleToEnd {
+//		slices.Reverse(path)
+//	}
+//
+//	textPos := Position{}
+//	isVertical := false
+//	for i := 1; i < len(path); i++ {
+//		prev := path[i-1]
+//		current := path[i]
+//		var distance float32
+//		if prev.X == current.X {
+//			distance = float32(math.Abs(float64(current.Y - prev.Y)))
+//			textPos.X = current.X
+//			isVertical = true
+//
+//			if current.Y > prev.Y {
+//				textPos.Y = prev.Y + offset
+//			} else {
+//				textPos.Y = prev.Y - offset
+//			}
+//
+//		} else {
+//			distance = float32(math.Abs(float64(current.X - prev.X)))
+//			textPos.Y = current.Y
+//			isVertical = false
+//
+//			if current.X > prev.X {
+//				textPos.X = prev.X + offset
+//			} else {
+//				textPos.X = prev.X - offset
+//			}
+//		}
+//
+//		if distance > offset {
+//			break
+//		}
+//
+//		offset = offset - distance
+//	}
+//
+//	attrs := AttributeList{DrawAttribute("none"), &FillAttribute{"white"}}
+//	if isVertical {
+//		attrs = append(attrs, AnchorAttribute("south"))
+//	}
+//
+//	c.AddElement(&Node{
+//		Attributes: attrs,
+//		Position:   textPos,
+//		Text:       &text,
+//	})
+//
+//}
 
 func directionFromMagnet(mag fig.ConnectorMagnet) Direction {
 	switch mag {

@@ -21,6 +21,21 @@ func (p Position) MiddleWith(p2 Position) Position {
 	return pos
 }
 
+type Axis int
+
+const (
+	AxisX Axis = iota
+	AxisY
+)
+
+func (p Position) AxisRelativeTo(p2 Position) Axis {
+	if p.X == p2.X {
+		return AxisY
+	}
+
+	return AxisX
+}
+
 func (p Position) String() string {
 	var x, y string
 	if p.XFunc != "" {
