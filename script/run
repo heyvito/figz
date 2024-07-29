@@ -1,15 +1,6 @@
 #!/bin/bash
 
-pushd . || exit 1
-cd ~/Downloads || exit 1
-cp fml.jam fml.zip
-rm -rf fml
-mkdir fml
-cd fml
-unzip ../fml.zip
-popd
-sleep 0.3
-data=$(go run main.go)
+data=$(go run main.go -o "~/Downloads/fml.tex" "~/Downloads/fml.jam")
 {
   echo '\\documentclass[1in]{article}'
   echo '\\usepackage{graphicx} % Required for inserting images'
@@ -18,6 +9,6 @@ data=$(go run main.go)
   echo '\\begin{document}'
   echo '\\eject'
   echo '\\pdfpagewidth=60in \pdfpageheight=60in'
-  printf '%s\n' "$data"
+  cat ~/Downloads/fml.tex
   echo '\\end{document}'
 } | pbcopy

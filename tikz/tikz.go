@@ -262,33 +262,11 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 		}
 
 	} else if c.IsArrowDiagonal(positionStart, positionEnd) {
-		midPoint := float32(math.Abs(float64(positionStart.X-positionEnd.X))) / 2.0
-
-		var x1, x2 float32
-		switch positionStart.DirectionTo(positionEnd) {
-		case RightDirection:
-			x1 = positionStart.X + midPoint
-			x2 = positionEnd.X - midPoint
-		case LeftDirection:
-			x1 = positionStart.X - midPoint
-			x2 = positionEnd.X + midPoint
-		case TopDirection:
-		case BottomDirection:
+		if midPoint := c.isPathLShaped(positionStart, positionEnd, magnetFrom, magnetTo); midPoint != nil {
+			c.makeLArrow(positionStart, *midPoint, positionEnd)
+		} else {
+			c.makeSArrow(positionStart, positionEnd)
 		}
-		cp1 := Position{
-			Y: positionStart.Y,
-			X: x1,
-		}
-
-		cp2 := Position{
-			Y: positionEnd.Y,
-			X: x2,
-		}
-
-		c.AddElement(&Draw{
-			Attributes: AttributeList{&ToAttribute{}, &ThickAttribute{}, &RoundedCornersAttribute{10}},
-			Points:     []Position{positionStart, cp1, cp2, positionEnd},
-		})
 	} else {
 		c.AddElement(&Draw{
 			Attributes: AttributeList{&ToAttribute{}, &ThickAttribute{}},
@@ -300,6 +278,73 @@ func (c *Compiler) drawArrow(w DrawingNode) {
 			c.drawArrowTextStraight(positionStart, positionEnd, connectorText, midPoint)
 		}
 	}
+}
+
+func (c *Compiler) isPathLShaped(p1, p2 Position, startMag, endMag fig.ConnectorMagnet) *Position {
+	if p1.X == p2.X || p1.Y == p2.Y {
+		return nil
+	}
+
+	// Project possible tangential point for p1, p2
+	possibilities := []Position{
+		{p1.X, p2.Y},
+		{p2.X, p1.Y},
+	}
+
+	for _, z := range possibilities {
+		if (p1.X != z.X || p2.Y != z.Y) && (p1.Y != z.Y || p2.X != z.X) {
+			continue
+		}
+		if c.isMagnetAligned(p1, z, startMag) && c.isMagnetAligned(p2, z, endMag) {
+			return &z
+		}
+	}
+
+	return nil
+}
+
+func (c *Compiler) isMagnetAligned(p1, p2 Position, mag fig.ConnectorMagnet) bool {
+	return (p1.X < p2.X && mag == fig.ConnectorMagnetRight) ||
+		(p1.X > p2.X && mag == fig.ConnectorMagnetLeft) ||
+		(p1.Y < p2.Y && mag == fig.ConnectorMagnetBottom) ||
+		(p1.Y > p2.Y && mag == fig.ConnectorMagnetTop)
+}
+
+func (c *Compiler) makeSArrow(positionStart, positionEnd Position) {
+	midPoint := float32(math.Abs(float64(positionStart.X-positionEnd.X))) / 2.0
+
+	var x1, x2 float32
+	switch positionStart.DirectionTo(positionEnd) {
+	case RightDirection:
+		x1 = positionStart.X + midPoint
+		x2 = positionEnd.X - midPoint
+	case LeftDirection:
+		x1 = positionStart.X - midPoint
+		x2 = positionEnd.X + midPoint
+	case TopDirection:
+	case BottomDirection:
+	}
+	cp1 := Position{
+		Y: positionStart.Y,
+		X: x1,
+	}
+
+	cp2 := Position{
+		Y: positionEnd.Y,
+		X: x2,
+	}
+
+	c.AddElement(&Draw{
+		Attributes: AttributeList{&ToAttribute{}, &ThickAttribute{}, &RoundedCornersAttribute{10}},
+		Points:     []Position{positionStart, cp1, cp2, positionEnd},
+	})
+}
+
+func (c *Compiler) makeLArrow(positionStart, positionMid, positionEnd Position) {
+	c.AddElement(&Draw{
+		Attributes: AttributeList{&ToAttribute{}, &ThickAttribute{}, &RoundedCornersAttribute{10}},
+		Points:     []Position{positionStart, positionMid, positionEnd},
+	})
 }
 
 func (c *Compiler) findMinX() float32 {
@@ -363,10 +408,11 @@ func (c *Compiler) drawShapeWithText(w DrawingNode) {
 	switch w.Node.ShapeWithTextType {
 	case fig.ShapeWithTextTypeSquare, fig.ShapeWithTextTypePredefinedProcess:
 		c.AddElement(&Shape{
-			P1:   w.Q1,
-			P2:   w.Q2,
-			Text: &text,
-			Kind: "rectangle",
+			P1:         w.Q1,
+			P2:         w.Q2,
+			Text:       &text,
+			Kind:       "rectangle",
+			Attributes: []Attribute{AlignAttribute("center")},
 		})
 
 	case fig.ShapeWithTextTypeEllipse:

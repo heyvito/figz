@@ -173,6 +173,22 @@ func (a AnchorAttribute) String() string {
 	return fmt.Sprintf("anchor=%s", string(a))
 }
 
+type AlignAttribute string
+
+func (a AlignAttribute) HasPosition() bool { return false }
+
+func (a AlignAttribute) GetPosition() Position {
+	panic("AlignAttribute has no position")
+}
+
+func (a AlignAttribute) SetPosition(p Position) {
+	panic("AlignAttribute has no position")
+}
+
+func (a AlignAttribute) String() string {
+	return fmt.Sprintf("align=%s", string(a))
+}
+
 type Draw struct {
 	Attributes AttributeList
 	Points     PositionList
@@ -223,6 +239,9 @@ func (s *Shape) AdjustX(offset float32) {
 	s.P1.X -= offset
 	s.P2.X -= offset
 	for _, a := range s.Attributes {
+		if !a.HasPosition() {
+			continue
+		}
 		p := a.GetPosition()
 		p.X -= offset
 		a.SetPosition(p)
